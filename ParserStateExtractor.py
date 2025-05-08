@@ -10,6 +10,8 @@ class ParserStateExtractor:
     Extracts consistent parser states from partial sequences using Lark's LALR parser.
     Provides stable state IDs and stack elements that remain consistent between runs.
     """
+    _global_state_counter = 0
+    _global_state_mapping = {} 
     
     def __init__(self, grammar_text):
         """
@@ -19,11 +21,26 @@ class ParserStateExtractor:
             grammar_text: The Lark grammar as a string
         """
         # We'll calculate a grammar hash to ensure we detect grammar changes
+        
         self.parser = Lark(grammar_text, parser='lalr')
-        self._state_mapping = {}  # Map from raw state IDs to consistent state IDs
-        self._state_counter = 0
+        self.interactive_parser = self.parser.parse_interactive('')
+        self.tokens = []
+        self.current_string = ""
+        self.current_remainder = ""
         self.debug= False 
 
+    def feed_input(self, text):
+        """
+        Advance the parser with a new text input.
+        """
+        # Reset the interactive parser
+        self.current_string = self.current_string+text
+        new_tokens, self.current_remainder = self.get_tokens_with_remainder(self.current_string)
+        different_tokens = new_tokens[len(self.tokens):]
+        for token in different_tokens:
+            self.interactive_parser.feed_token(token)
+        self.tokens = new_tokens
+        
     def log(self, *args):
         if self.debug:
             print("[DEBUG]", *args)
@@ -103,6 +120,7 @@ class ParserStateExtractor:
         """
         Map a raw state ID to a consistent ID based on its behavior
         """
+        cls = self.__class__
         # Create fingerprint of the state
         fingerprint = self._get_state_fingerprint(state_id, parse_table)
         if fingerprint is None:
@@ -110,11 +128,11 @@ class ParserStateExtractor:
             
         # Get or create consistent ID for this fingerprint
         fingerprint_hash = hash(fingerprint)
-        if fingerprint_hash not in self._state_mapping:
-            self._state_mapping[fingerprint_hash] = f"S{self._state_counter}"
-            self._state_counter += 1
+        if fingerprint_hash not in cls._global_state_mapping:
+            cls._global_state_mapping[fingerprint_hash] = f"S{cls._global_state_counter}"
+            cls._global_state_counter += 1
             
-        return self._state_mapping[fingerprint_hash]
+        return cls._global_state_mapping[fingerprint_hash]
     
     def get_parser_state(self, interactive_parser, top_k=3):
         """
@@ -140,35 +158,22 @@ class ParserStateExtractor:
             'stack_top': consistent_stack[-1] if consistent_stack else None,
         }
 
-    def parse_partial(self, sequence, top_k=None, tokens=None):
-        """
-        Parse a partial sequence and return the parser state and stack
-        """
-        """For char: by char
-            try:
-            # Start interactive parsing
-            interactive = self.parser.parse_interactive(sequence)
-            
-            # Feed tokens one by one to advance the parser
-            for token in interactive.lexer_thread.lex(interactive.parser_state):
-                interactive.feed_token(token)"""
+    def parse_partial(self,  top_k=3):
         try:
-            # Use provided tokens or lex the sequence
-            if tokens is None:
-                tokens,remainder = self.get_tokens_with_remainder(sequence)
-            interactive = self.parser.parse_interactive('')
-            for token in tokens:
-                interactive.feed_token(token)
-            result = self.get_parser_state(interactive)
-            result['remainder'] = remainder
+            result = self.get_parser_state(self.interactive_parser, top_k=top_k)
+            result['remainder'] = self.current_remainder
             return result
-            
         except Exception as e:
             return {
                 'error': str(e),
                 'success': False,
             }
-    def analyze_incremental(self, sequence):
+        
+    def advance_parser(self, sequence, top_k=3):
+        self.feed_input(sequence)
+        return self.get_parser_state(self.interactive_parser, top_k=top_k)
+    
+    def _analyze_incremental(self, sequence):
         """
         Analyze a sequence incrementally, returning the parser state at each step
         """
@@ -178,17 +183,14 @@ class ParserStateExtractor:
             # Get all tokens at once
             all_tokens, remainder = self.get_tokens_with_remainder(sequence)
             
-            # Create interactive parser once
             interactive = self.parser.parse_interactive('')
             
             # For each token:
             for i, token in enumerate(all_tokens):
                 # Feed the next token
                 interactive.feed_token(token)
-                current_set = self.get_parser_state(interactive)
-                current_set['success'] = True
+                current_set = self.get_parser_state(interactive, top_k=None)
                 current_set['text'] = all_tokens[:i + 1]
-                current_set['position'] = i + 1
                 results.append(current_set)
             results[-1]['remainder'] = remainder
                     
@@ -228,8 +230,16 @@ class ParserStateExtractor:
         self.state_evolution = state_evolution
         return results
     
+    def reset(self):
+        """
+        Reset the parser state
+        """
+        self.tokens = []
+        self.current_string = ""
+        self.current_remainder = ""
+        self.interactive_parser = self.parser.parse_interactive('')
+
 def extract_parser_states(grammar, sequence, top_k=None):
-    
     return extractor.parse_partial(sequence, top_k)
 
 def analyze_sequence(grammar, sequence):
@@ -264,39 +274,41 @@ if __name__ == "__main__":
         """
     
     # Test with a partial expression
-    sequence = '{"name": "Alexander", "age": 25, "active": true'
-    grammar_path = "./json.ebnf"  # Or any path you want
-    with open(grammar_path, "r") as f:
-        grammar = f.read()
+    sequence1 = '{"name": "Alexander", "active": tr'
+    sequence2 = 'ue, "age": 25}'
+    full_sequence = '{"name": "Alexander", "active": true, "age": 25}'
+
     grammar = json_grammar
-    # Get parser state for the full partial sequence
-    print("Parser state for:", sequence)
     extractor = ParserStateExtractor(grammar)
-    result = extractor.parse_partial(sequence, top_k=3)
-    print(json.dumps(result, indent=2))
-    extractor = ParserStateExtractor(grammar)
-    sequence = '{"name": "Alexander", "age": 25, "active": trux'
-    result = extractor.parse_partial(sequence, top_k=3)
-    print(json.dumps(result, indent=2))
+    """results = extractor.advance_parser(sequence1)
+    print(results)
+    results2 = extractor.advance_parser(sequence2)
+    print(results2)
     
-    # Get incremental analysis
-    
-    
+    extractor.reset()
+    print("run two")
+    extractor.feed_input(sequence1)
+    results = extractor.parse_partial()
+    print(results)
+    extractor.feed_input(sequence2)
+    results2 =extractor.parse_partial()
+    print(results2)"""
+
+    #extractor.reset()
+    #print(extractor.advance_parser(full_sequence))
+
     
     
     
     print("\nIncremental analysis:")
-    results = extractor.analyze_incremental(sequence)
+    results = extractor._analyze_incremental(full_sequence)
     
     for r in results:
-        if r['success']:
-            print(f"Position {r['position']} ('{r['text']}'): ")
-            print(f"  State: {r['current_state']}")
-            print(f"  Stack: {r['stack']}")
-        else:
-            print(f"Position {r['position']} ('{r['text']}'): Error: {r['error']}")
+        print(f"('{r['text']}'): ")
+        print(f"  State: {r['current_state']}")
+        print(f"  Stack: {r['stack']}")
 
-    sequence = '{"name": "Alexander", "age": 25, "active": truxx'
+    """sequence = '{"name": "Alexander", "age": 25, "active": truxx'
     results = extractor.analyze_incremental(sequence)
     
     for r in results:
@@ -305,4 +317,4 @@ if __name__ == "__main__":
             print(f"  State: {r['current_state']}")
             print(f"  Stack: {r['stack']}")
         else:
-            print(f"Position {r['position']} ('{r['text']}'): Error: {r['error']}") 
+            print(f"Position {r['position']} ('{r['text']}'): Error: {r['error']}")"""

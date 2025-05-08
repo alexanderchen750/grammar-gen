@@ -1,9 +1,10 @@
+from transformers import AutoTokenizer
+
 class LLMTokenizer:
     """Wrapper for LLM tokenizers to provide a consistent interface."""
     
     def __init__(self, tokenizer_name="gpt2"):
         """Initialize with a model name or tokenizer instance."""
-        from transformers import AutoTokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     
     def encode(self, text):
