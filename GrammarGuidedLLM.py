@@ -20,16 +20,16 @@ class GrammarGuidedLLM:
     def process_instance(self, text):
         # Tokenize output with LLM tokenizer
         llm_tokens = self.llm_tokenizer.encode(text)
-        
+
+        lexer_tokens = self.parser_extractor.get_lexical_tokens_with_positions(text)
+        print("Lexer tokens: ", lexer_tokens)
+
         results = []
         for i in range(len(llm_tokens) - 1):
-            # Get prefix tokens and text
-            prefix_tokens = llm_tokens[:i+1]
-            prefix_text = self.llm_tokenizer.decode(prefix_tokens)
             new_text = self.llm_tokenizer.decode(llm_tokens[i])
-            self.log(f"Prefix tokens: {prefix_tokens}")
-            self.log(f"Prefix text: {prefix_text}")
-            
+            self.log(f"Prefix tokens: {llm_tokens[:i+1]}")
+            self.log(f"Prefix text: {self.llm_tokenizer.decode(llm_tokens[:i+1])}")
+            print(f"Prefix text: {new_text}")
             result_set = self.parser_extractor.advance_parser(new_text, top_k=self.stack_context_length)
             if i != llm_tokens[-1]:
                 result_set['next_token'] = self.llm_tokenizer.decode([llm_tokens[i+1]])
@@ -50,7 +50,8 @@ class GrammarGuidedLLM:
                 result = self.process_instance(instance)
                 all_instances.append(result)
                 self.parser_extractor.reset()
-            except Exception:
-                print(f"Error processing instance: {instance}")
+            except Exception as e:
+                #print(f"Error processing instance: {instance}")
+                print("Error: ", str(e))
                 continue
         return all_instances

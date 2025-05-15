@@ -4,6 +4,17 @@ import hashlib
 import json
 from lark.exceptions import UnexpectedCharacters
 
+"""
+TODO: Consistency Guarantee
+Ensure consistency with the parser's state machine.
+Consider adding random seed for hash funcitons, or replace dicts iwth order_dict
+Store global state mapping across sessions to ensure consistency
+
+TODO: Error Handling
+
+TODO: Performance
+Changing output formats to one hot encoding/tensor or something more efficient?can
+"""
 
 class ParserStateExtractor:
     """
@@ -28,7 +39,14 @@ class ParserStateExtractor:
         self.current_string = ""
         self.current_remainder = ""
         self.debug= False 
-
+        """
+        for state in self.interactive_parser.parser_state.parse_conf.parse_table.states:
+            # Get the state ID
+            print( self.interactive_parser.parser_state.parse_conf.parse_table.states[state].state_id)
+            print(" ")
+            # Get the consistent state ID
+            # Store the mapping
+        """
     def feed_input(self, text):
         """
         Advance the parser with a new text input.
@@ -74,6 +92,31 @@ class ParserStateExtractor:
             # Everything from the error position to the end is our remainder
             remainder = sequence[e.pos_in_stream:]
             return tokens, remainder
+        
+    def get_lexical_tokens_with_positions(self, text):
+        """
+        Get all lexical tokens with their positions in the original text 
+        reutrn list[tuple(start,end)]
+        """
+        try:
+            lexer = self.parser.lex(text)
+            tokens = list(lexer)
+            token_info = []
+            
+            for token in tokens:
+                token_info.append((token.start_pos, token.end_pos))
+    
+            return token_info
+            
+        except UnexpectedCharacters as e:
+            # Process tokens up to the error
+            tokens = list(self.parser.lex(text[:e.pos_in_stream]))
+            token_info = []
+            
+            for token in tokens:
+                token_info.append((token.start_pos, token.end_pos))
+            remainder = text[e.pos_in_stream:]
+            return token_info, remainder
 
 
     def _get_state_fingerprint(self, state_id, parse_table):
@@ -134,6 +177,25 @@ class ParserStateExtractor:
             
         return cls._global_state_mapping[fingerprint_hash]
     
+    def _get_value_stack(self, value_stack, top_k=3):
+        """
+        Extract terminal categories from the value stack
+        """
+        terminal_categories = []
+        # Get the last top_k items, but check if there are enough items first
+        values_to_process = value_stack[-top_k:] if len(value_stack) >= top_k else value_stack
+        
+        for value in values_to_process:
+            if isinstance(value, Token):
+                terminal_categories.append(value.type)  # Use token type not value
+            elif hasattr(value, 'data'):  # For Tree objects
+                # This is a parse tree, extract its type
+                terminal_categories.append(f"{value.data}")
+            else:
+                terminal_categories.append(type(value).__name__)
+                
+        return terminal_categories
+
     def get_parser_state(self, interactive_parser, top_k=3):
         """
         Get the parser state from an interactive parser
@@ -144,6 +206,11 @@ class ParserStateExtractor:
         # Get raw state information
         raw_state_id = parser_state.position
         raw_stack = list(parser_state.state_stack)
+        value_stack = list(parser_state.value_stack)
+        #print(value_stack)
+        #print(" ")
+        # Get the value stack
+        value_stack = self._get_value_stack(value_stack, top_k)
         
         # Get consistent IDs for states
         consistent_state_id = self._get_consistent_state_id(raw_state_id, parse_table)
@@ -155,7 +222,7 @@ class ParserStateExtractor:
         return {
             'current_state': consistent_state_id,
             'stack': consistent_stack if top_k is None else consistent_stack[-top_k:],
-            'stack_top': consistent_stack[-1] if consistent_stack else None,
+            'value_stack': value_stack,
         }
 
     def parse_partial(self,  top_k=3):
@@ -171,7 +238,9 @@ class ParserStateExtractor:
         
     def advance_parser(self, sequence, top_k=3):
         self.feed_input(sequence)
-        return self.get_parser_state(self.interactive_parser, top_k=top_k)
+        result = self.get_parser_state(self.interactive_parser, top_k=top_k)
+        result['remainder'] = self.current_remainder
+        return result
     
     def _analyze_incremental(self, sequence):
         """
@@ -277,6 +346,7 @@ if __name__ == "__main__":
     sequence1 = '{"name": "Alexander", "active": tr'
     sequence2 = 'ue, "age": 25}'
     full_sequence = '{"name": "Alexander", "active": true, "age": 25}'
+    full_sequence = '{"name": "Alice40", "age": 64, "active": false, "email": "user40@example.com", "tags": ["premium"], "preferences": {"notifications": "all", "theme": "dark"}\}'
 
     grammar = json_grammar
     extractor = ParserStateExtractor(grammar)
@@ -295,18 +365,18 @@ if __name__ == "__main__":
     print(results2)"""
 
     #extractor.reset()
-    #print(extractor.advance_parser(full_sequence))
+    extractor.advance_parser(full_sequence)
 
     
     
     
-    print("\nIncremental analysis:")
+    """print("\nIncremental analysis:")
     results = extractor._analyze_incremental(full_sequence)
     
     for r in results:
         print(f"('{r['text']}'): ")
         print(f"  State: {r['current_state']}")
-        print(f"  Stack: {r['stack']}")
+        print(f"  Stack: {r['stack']}")"""
 
     """sequence = '{"name": "Alexander", "age": 25, "active": truxx'
     results = extractor.analyze_incremental(sequence)
