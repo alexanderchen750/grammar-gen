@@ -3,6 +3,7 @@ from lark.lexer import Token
 import hashlib
 import json
 from lark.exceptions import UnexpectedCharacters
+import os
 
 """
 TODO: Consistency Guarantee
@@ -24,7 +25,7 @@ class ParserStateExtractor:
     _global_state_counter = 0
     _global_state_mapping = {} 
     
-    def __init__(self, grammar_text):
+    def __init__(self, grammar_text, mapping_file=None):
         """
         Initialize with a grammar string
         
@@ -32,13 +33,15 @@ class ParserStateExtractor:
             grammar_text: The Lark grammar as a string
         """
         # We'll calculate a grammar hash to ensure we detect grammar changes
-        
+        grammar_hash = hashlib.md5(grammar_text.encode()).hexdigest()[:8]
+    
         self.parser = Lark(grammar_text, parser='lalr')
         self.interactive_parser = self.parser.parse_interactive('')
         self.tokens = []
         self.current_string = ""
         self.current_remainder = ""
         self.debug= False 
+        self._state_mapping = self._initialize_state_mappings()
         """
         for state in self.interactive_parser.parser_state.parse_conf.parse_table.states:
             # Get the state ID
@@ -47,6 +50,9 @@ class ParserStateExtractor:
             # Get the consistent state ID
             # Store the mapping
         """
+
+
+
     def feed_input(self, text):
         """
         Advance the parser with a new text input.
@@ -118,64 +124,76 @@ class ParserStateExtractor:
             remainder = text[e.pos_in_stream:]
             return token_info, remainder
 
-
-    def _get_state_fingerprint(self, state_id, parse_table):
-        """
-        Create a deterministic fingerprint for a state based on its parse table entries
-        """
-        if state_id not in parse_table.states:
-            return None
-            
-        # Collect actions for this state in a deterministic way
-        fingerprint_parts = []
+    def _initialize_state_mappings(self):
+        """Generate consistent state mappings by directly accessing the transition table"""
+        parse_table = self.interactive_parser.parser_state.parse_conf.parse_table
         
-        # Add shift/reduce actions
-        for term, action_data in parse_table.states.get(state_id, {}).items():
-            action_type, target = action_data
+        # Build fingerprints for all states directly from the transition table
+        state_fingerprints = {}
+        
+        # First pass: collect all state information
+        for state_id in sorted(parse_table.states.keys()):
+            # Get transitions directly
+            transitions = []
             
-            # Handle different action types properly
-            if hasattr(action_type, '__name__'):
-                action_type_name = action_type.__name__
-            else:
-                # For Action objects that don't have __name__
-                action_type_name = action_type.__class__.__name__
-            
-            # Format based on action type
-            if action_type_name == "Shift":
-                action = f"{action_type_name}:{target}"
-            else:
-                # For Reduce and Accept actions
-                if hasattr(target, 'origin') and hasattr(target, 'expansion'):
-                    action = f"{action_type_name}:{target.origin}:{len(target.expansion)}"
+            # Process action entries (shift/reduce/accept)
+            for term, (action, target) in sorted(parse_table.states[state_id].items()):
+                term_name = term.name if hasattr(term, 'name') else str(term)
+                
+                # Create a canonical representation of the action
+                # Handle both string name and class instance
+                if hasattr(action, '__name__'):
+                    action_name = action.__name__
                 else:
-                    # Fallback for any other action type
-                    action = f"{action_type_name}:{str(target)}"
+                    # For newer Lark versions, get the class name
+                    action_name = action.__class__.__name__
                     
-            fingerprint_parts.append((str(term), action))
+                if action_name == 'Shift':
+                    action_str = 'SHIFT'
+                elif action_name == 'Reduce':
+                    # Get rule details in a deterministic way
+                    rule = target
+                    origin = str(rule.origin)
+                    expansion = '+'.join(str(x) for x in rule.expansion)
+                    action_str = f"REDUCE:{origin}:{expansion}"
+                else:
+                    action_str = action_name
+                    
+                transitions.append((term_name, action_str))
             
-        # Sort for consistency
-        fingerprint_parts.sort()
+            # Get lookaheads if available
+            if hasattr(parse_table, 'lookaheads') and state_id in parse_table.lookaheads:
+                for item, terms in sorted(parse_table.lookaheads[state_id].items()):
+                    item_str = str(item)
+                    terms_str = '+'.join(sorted(str(t) for t in terms))
+                    transitions.append((f"LA:{item_str}", terms_str))
+            
+            # Sort for determinism
+            state_fingerprints[state_id] = tuple(sorted(transitions))
         
-        # Return a stable representation
-        return tuple(fingerprint_parts)   
-    
+        # Create canonical string representations of fingerprints
+        fp_strings = {}
+        for state_id, fingerprint in state_fingerprints.items():
+            parts = []
+            for term, action in fingerprint:
+                parts.append(f"{term}:{action}")
+            fp_strings[state_id] = "||".join(parts)
+        
+        # Create mapping based on sorted fingerprint strings
+        sorted_entries = sorted(fp_strings.items(), key=lambda x: x[1])
+        
+        # Assign sequential IDs
+        state_mapping = {}
+        for i, (state_id, _) in enumerate(sorted_entries):
+            state_mapping[state_id] = f"S{i:03d}"
+        
+        return state_mapping
+
     def _get_consistent_state_id(self, state_id, parse_table):
         """
-        Map a raw state ID to a consistent ID based on its behavior
+        Get consistent state ID from pre-computed mapping
         """
-        cls = self.__class__
-        # Create fingerprint of the state
-        fingerprint = self._get_state_fingerprint(state_id, parse_table)
-        if fingerprint is None:
-            return None
-            
-        # Get or create consistent ID for this fingerprint
-        fingerprint_hash = hash(fingerprint)
-        if fingerprint_hash not in cls._global_state_mapping:
-            cls._global_state_mapping[fingerprint_hash] = f"S{cls._global_state_counter}"
-            cls._global_state_counter += 1
-            
-        return cls._global_state_mapping[fingerprint_hash]
+        return self._state_mapping.get(state_id, None)
     
     def _get_value_stack(self, value_stack, top_k=3):
         """
@@ -228,7 +246,7 @@ class ParserStateExtractor:
     def parse_partial(self,  top_k=3):
         try:
             result = self.get_parser_state(self.interactive_parser, top_k=top_k)
-            result['remainder'] = self.current_remainder
+            #result['remainder'] = self.current_remainder
             return result
         except Exception as e:
             return {
@@ -239,7 +257,7 @@ class ParserStateExtractor:
     def advance_parser(self, sequence, top_k=3):
         self.feed_input(sequence)
         result = self.get_parser_state(self.interactive_parser, top_k=top_k)
-        result['remainder'] = self.current_remainder
+        #result['remainder'] = self.current_remainder
         return result
     
     def _analyze_incremental(self, sequence):

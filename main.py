@@ -2,11 +2,11 @@ from GrammarGuidedLLM import GrammarGuidedLLM
 from ParserStateExtractor import ParserStateExtractor
 import json
 
-def main():
+def main(output_file):
     # File paths - manually change these as needed
     grammar_file = "SQL.lark"
     dataset_file = "SQL_sample.txt"
-    output_file = "results.txt"
+    #output_file = "results1.txt"
 
     # Fallback dataset if the file can't be opened
     
@@ -49,15 +49,6 @@ def main():
             error_count += 1
             continue
         """
-
-        
-
-    
-
-
-
-    
-    
     # Process dataset
     #print(f"Processing {len(dataset)} examples...")
     results = builder.process_dataset(dataset)
@@ -70,4 +61,7 @@ def main():
     #print(f"Total errors encountered: {error_count}")
 
 if __name__ == "__main__":
-    main()
+    main("results1.txt")
+    main("results2.txt")
+    #main("results3.txt")
+    #main("results3.txt")
