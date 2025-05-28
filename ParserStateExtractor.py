@@ -8,8 +8,8 @@ import os
 """
 TODO: Consistency Guarantee
 Ensure consistency with the parser's state machine.
-Consider adding random seed for hash funcitons, or replace dicts iwth order_dict
 Store global state mapping across sessions to ensure consistency
+Current solution: cache a parser, which should be consistent across runs
 
 TODO: Error Handling
 
@@ -35,7 +35,7 @@ class ParserStateExtractor:
         # We'll calculate a grammar hash to ensure we detect grammar changes
         grammar_hash = hashlib.md5(grammar_text.encode()).hexdigest()[:8]
     
-        self.parser = Lark(grammar_text, parser='lalr')
+        self.parser = Lark(grammar_text, parser='lalr', cache=True,)
         self.interactive_parser = self.parser.parse_interactive('')
         self.tokens = []
         self.current_string = ""
@@ -325,6 +325,14 @@ class ParserStateExtractor:
         self.current_string = ""
         self.current_remainder = ""
         self.interactive_parser = self.parser.parse_interactive('')
+
+    def validate_state_consistency(self):
+        """Test that same input produces same states"""
+        test_input = "simple test"
+        state1 = self.advance_parser(test_input)
+        self.reset()
+        state2 = self.advance_parser(test_input)
+        assert state1 == state2, "States not consistent!"
 
 def extract_parser_states(grammar, sequence, top_k=None):
     return extractor.parse_partial(sequence, top_k)
